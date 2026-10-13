@@ -1,5 +1,7 @@
 .clasp.json
 .clasprc.json
+.deployment.json
+.clasp-pull/
 *.csv
 *.xlsx
 .DS_Store

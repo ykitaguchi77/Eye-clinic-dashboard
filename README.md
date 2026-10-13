@@ -6,10 +6,23 @@
 
 | ファイル | 内容 |
 |---|---|
-| `Code.gs` | サーバ側スクリプト（初期設定、予約の登録・変更・取消、収益集計、Googleカレンダー反映） |
-| `Index.html` | 画面（病床カレンダー、予約入力、収益見込み） |
-| `appsscript.json` | マニフェスト（組織内限定のウェブアプリとして公開） |
-| `セットアップ手順.md` | スプレッドシートへの貼り付けから公開までの手順 |
+| `setup.mjs` | 一括セットアップ／更新スクリプト（`node setup.mjs`） |
+| `src/Code.gs` | サーバ側スクリプト（初期設定、予約の登録・変更・取消、収益集計、Googleカレンダー反映） |
+| `src/Index.html` | 画面（病床カレンダー、予約入力、収益見込み） |
+| `src/appsscript.json` | マニフェスト（組織内限定のウェブアプリとして公開） |
+| `セットアップ手順.md` | 事前準備、コマンドでのセットアップ、手動セットアップ |
+
+## セットアップ
+
+Node.js 20以上を入れ、Apps Script API をオンにしたうえで（詳しくは `セットアップ手順.md`）：
+
+```
+git clone https://github.com/ykitaguchi77/Eye-clinic-dashboard.git
+cd Eye-clinic-dashboard
+node setup.mjs
+```
+
+コードを更新したときは、同じフォルダで `git pull` してから `node setup.mjs` を再実行すると、同じURLのまま新しい版に切り替わります。
 
 ## 機能（v0.1）
 

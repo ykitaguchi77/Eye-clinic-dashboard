@@ -2,7 +2,7 @@
  * 入院・病床管理 v0.1
  * Googleスプレッドシート（コンテナバインド）＋ Apps Script ウェブアプリ
  *
- * 初回：関数 setup を実行 → 各マスタを入力 → ウェブアプリとしてデプロイ
+ * 初回：node setup.mjs で作成・公開 → URLを開くと初期設定が自動で走る → 各マスタを入力
  */
 
 const SH = {
@@ -26,7 +26,8 @@ const ROLES_EDIT = ['管理', '入力'];
  * ---------------------------------------------------------- */
 function setup() {
   const ss = SpreadsheetApp.getActive();
-  const me = Session.getActiveUser().getEmail();
+  // 実行者（ウェブアプリ初回アクセス時はデプロイした人）を最初の管理者にする
+  const me = Session.getEffectiveUser().getEmail() || Session.getActiveUser().getEmail();
 
   const book = makeSheet_(ss, SH.BOOK, BOOK_HEAD, []);
   if (book) {
@@ -69,7 +70,7 @@ function setup() {
   const def = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
   if (def && def.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(def);
 
-  ss.toast('初期設定が完了しました。各マスタを入力してください。');
+  try { ss.toast('初期設定が完了しました。各マスタを入力してください。'); } catch (e) { /* ウェブアプリから実行した場合は表示しない */ }
 }
 
 function makeSheet_(ss, name, head, rows) {
@@ -85,6 +86,7 @@ function makeSheet_(ss, name, head, rows) {
  * ウェブアプリ入口
  * ---------------------------------------------------------- */
 function doGet() {
+  ensureSetup_();
   const u = currentUser_();
   if (!u) {
     const email = Session.getActiveUser().getEmail() || '（取得できませんでした）';
@@ -98,6 +100,18 @@ function doGet() {
   return HtmlService.createTemplateFromFile('Index').evaluate()
     .setTitle('入院・病床管理')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/** シートがまだ無ければ初期設定を自動実行（初回アクセス時） */
+function ensureSetup_() {
+  if (SpreadsheetApp.getActive().getSheetByName(SH.USER)) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    if (!SpreadsheetApp.getActive().getSheetByName(SH.USER)) setup();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 /* ------------------------------------------------------------
