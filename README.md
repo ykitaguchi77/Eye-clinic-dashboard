@@ -6,15 +6,26 @@
 
 | ファイル | 内容 |
 |---|---|
+| `gas/Code.gs` | 1ファイル版。Apps Script エディタに貼り付けるだけで動く（Node.js 不要、自動生成） |
 | `setup.mjs` | 一括セットアップ／更新スクリプト（`node setup.mjs`） |
 | `src/Code.gs` | サーバ側スクリプト（初期設定、予約の登録・変更・取消、収益集計、Googleカレンダー反映） |
 | `src/Index.html` | 画面（病床カレンダー、予約入力、収益見込み） |
 | `src/appsscript.json` | マニフェスト（組織内限定のウェブアプリとして公開） |
-| `セットアップ手順.md` | 事前準備、コマンドでのセットアップ、手動セットアップ |
+| `tools/build-gas.mjs` | `src/` から `gas/Code.gs` を作り直すスクリプト |
+| `セットアップ手順.md` | ブラウザだけでの設定（方法A）、コマンドでの設定（方法B）、マスタの入力 |
 
 ## セットアップ
 
-Node.js 20以上を入れ、Apps Script API をオンにしたうえで（詳しくは `セットアップ手順.md`）：
+詳しくは `セットアップ手順.md` を参照してください。
+
+**方法A：ブラウザだけ（Node.js 不要）** — 施設のPCなど、ソフトをインストールできない環境向け。
+
+1. スプレッドシートを作り、「拡張機能」→「Apps Script」を開く
+2. `コード.gs` の中身を `gas/Code.gs` の内容に置き換えて保存
+3. 「デプロイ」→「新しいデプロイ」→ ウェブアプリ（実行：自分／アクセス：組織内の全員）
+4. 表示されたURLをまず自分で開く（シートは自動で作られる）
+
+**方法B：コマンド（Node.js）** — Apps Script API をオンにしたうえで：
 
 ```
 git clone https://github.com/ykitaguchi77/Eye-clinic-dashboard.git
@@ -23,6 +34,10 @@ node setup.mjs
 ```
 
 コードを更新したときは、同じフォルダで `git pull` してから `node setup.mjs` を再実行すると、同じURLのまま新しい版に切り替わります。
+
+## 開発メモ
+
+編集するのは `src/` のファイルです。編集したら `node tools/build-gas.mjs` で `gas/Code.gs` を作り直し、両方をコミットしてください（`node tools/build-gas.mjs --check` でずれを確認できます）。
 
 ## 機能（v0.1）
 

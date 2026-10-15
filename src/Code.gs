@@ -16,7 +16,7 @@ const SH = {
 };
 const BOOK_HEAD = ['予約ID', '患者ID', '術式コード', '入院日', 'ベッド番号', '状態', 'メモ',
   '登録者', '登録日時', '更新者', '更新日時', 'カレンダーイベントID'];
-const TZ = 'Asia/Tokyo';
+const TZ = Session.getScriptTimeZone() || 'Asia/Tokyo';
 const ROLES_ALL = ['管理', '入力', '閲覧'];
 const ROLES_EDIT = ['管理', '入力'];
 
@@ -97,9 +97,18 @@ function doGet() {
       '管理者にスプレッドシートの「ユーザー」シートへの追加を依頼してください。</p></div>')
       .setTitle('入院・病床管理');
   }
-  return HtmlService.createTemplateFromFile('Index').evaluate()
+  return page_()
     .setTitle('入院・病床管理')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+/**
+ * 画面のHTML。通常は Index.html を使う。
+ * 1ファイル版（gas/Code.gs）では INDEX_HTML_ に同じ内容が埋め込まれている。
+ */
+function page_() {
+  if (typeof INDEX_HTML_ !== 'undefined') return HtmlService.createHtmlOutput(INDEX_HTML_);
+  return HtmlService.createHtmlOutputFromFile('Index');
 }
 
 /** シートがまだ無ければ初期設定を自動実行（初回アクセス時） */
