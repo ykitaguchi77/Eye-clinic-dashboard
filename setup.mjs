@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 入院・病床管理ダッシュボード 一括セットアップ／更新スクリプト
+ * 入院・手術・発注管理 一括セットアップ／更新スクリプト
  *
  *   node setup.mjs            初回：Googleにログイン → スプレッドシート作成 → コード転送 → ウェブアプリ公開
  *                             2回目以降：コードを転送して、同じURLのまま新しい版に更新
@@ -25,7 +25,7 @@ const isWin = process.platform === 'win32';
 process.chdir(ROOT);
 
 const titleIdx = process.argv.indexOf('--title');
-const TITLE = titleIdx > 0 && process.argv[titleIdx + 1] ? process.argv[titleIdx + 1] : '入院・病床管理';
+const TITLE = titleIdx > 0 && process.argv[titleIdx + 1] ? process.argv[titleIdx + 1] : '入院・手術・発注管理';
 
 function fail(msg) {
   console.error('\n[エラー] ' + msg);
@@ -96,7 +96,7 @@ if (!fs.existsSync(CLASP_JSON)) {
   clasp(['push', '--force']);
 
   console.log('\n▶ ウェブアプリとして公開します…');
-  const dep = lastJson(clasp(['create-deployment', '--description', 'v0.1 ' + today, '--json'], { capture: true }));
+  const dep = lastJson(clasp(['create-deployment', '--description', 'v0.2 ' + today, '--json'], { capture: true }));
   fs.writeFileSync(DEPLOY_JSON, JSON.stringify({ deploymentId: dep.deploymentId, spreadsheetId: created.parentId, scriptId: created.scriptId }, null, 2));
 
   console.log('\n==================== 完了 ====================');
