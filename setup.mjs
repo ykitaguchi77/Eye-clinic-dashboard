@@ -75,7 +75,7 @@ for (const f of ['src/Code.gs', 'src/Index.html', 'src/appsscript.json']) {
 
 // ---- ログイン（未ログイン時のみ） ----
 if (!fs.existsSync(path.join(os.homedir(), '.clasprc.json'))) {
-  console.log('\n▶ Googleにログインします。ブラウザが開いたら、クリニックの Google Workspace アカウントで許可してください。\n');
+  console.log('\n▶ Googleにログインします。ブラウザが開いたら、データの持ち主になるクリニックの Google アカウントで許可してください。\n');
   clasp(['login']);
 }
 
@@ -96,17 +96,17 @@ if (!fs.existsSync(CLASP_JSON)) {
   clasp(['push', '--force']);
 
   console.log('\n▶ ウェブアプリとして公開します…');
-  const dep = lastJson(clasp(['create-deployment', '--description', 'v0.2 ' + today, '--json'], { capture: true }));
+  const dep = lastJson(clasp(['create-deployment', '--description', 'v0.3 ' + today, '--json'], { capture: true }));
   fs.writeFileSync(DEPLOY_JSON, JSON.stringify({ deploymentId: dep.deploymentId, spreadsheetId: created.parentId, scriptId: created.scriptId }, null, 2));
 
   console.log('\n==================== 完了 ====================');
   console.log('スプレッドシート : https://docs.google.com/spreadsheets/d/' + created.parentId + '/edit');
   console.log('ダッシュボードURL : ' + webAppUrl(dep.deploymentId));
   console.log('\n次にやること：');
-  console.log(' 1. ダッシュボードURLを「自分で」最初に開き、表示される権限の確認を許可する');
-  console.log('    （初回アクセス時にシートが自動で作られ、あなたが管理者として登録されます）');
-  console.log(' 2. スプレッドシートの各マスタ（単価・床数・手術枠・ユーザー）を入力する');
-  console.log(' 3. ダッシュボードURLを職員に共有する');
+  console.log(' 1. ダッシュボードURLを「持ち主が」最初に開き、権限の確認を許可する');
+  console.log('    （シートと、同じフォルダに管理者用スプレッドシートが自動で作られます）');
+  console.log(' 2. 各マスタ（術式・単価・床数・手術枠・品目）を入力する');
+  console.log(' 3. 使う人にスプレッドシートを共有し（入力＝編集者、閲覧＝閲覧者、管理＝管理者用も共有）、ダッシュボードURLを伝える');
   console.log('==============================================\n');
 } else {
   // ---- 2回目以降：転送 → 同じURLで更新 ----

@@ -16,13 +16,14 @@ module.exports = function load(codePath) {
   sandbox.GasMock.reset();
   const code = fs.readFileSync(codePath || path.join(__dirname, '..', 'src', 'Code.gs'), 'utf8');
   // const/let のトップレベル宣言も外から参照できるように、最後に関数群をまとめて公開する
-  vm.runInContext(code + '\n;globalThis.__T = { SH, HEAD, B, O, SheetModel_, monthData_, buildRevenueModel_, buildExpenseModel_, buildCostModel_, buildOrderSummaryModel_, buildOrderModel_, procs_, cats_, items_, vendors_, bookings_, orders_ };', sandbox);
+  vm.runInContext(code + '\n;globalThis.__T = { SH, ASH, HEAD, ADMIN_PROP, B, O, SheetModel_, monthData_, buildRevenueModel_, buildExpenseModel_, buildCostModel_, buildOrderSummaryModel_, buildOrderModel_, procs_, cats_, items_, vendors_, bookings_, orders_ };', sandbox);
   return { ctx: sandbox, mock: sandbox.GasMock, T: sandbox.__T };
 };
 
-/** シートの2行目以降を rows で置き換える（初期マスタの貼り付けを真似る） */
-module.exports.paste = function paste(mock, sheetName, rows) {
-  const sh = mock.state.active.getSheetByName(sheetName);
+/** シートの2行目以降を rows で置き換える（初期マスタの貼り付けを真似る）。admin=true なら管理者用スプレッドシート */
+module.exports.paste = function paste(mock, sheetName, rows, admin) {
+  const ss = admin ? mock.state.all.find(s => s.id === mock.state.props.ADMIN_SPREADSHEET_ID) : mock.state.active;
+  const sh = ss.getSheetByName(sheetName);
   sh.data = sh.data.slice(0, 1);
   if (rows.length) sh.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
 };

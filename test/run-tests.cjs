@@ -11,22 +11,29 @@ const throwsLike = (fn, re, name) => { try { fn(); ok(false, name); } catch (e) 
 const { ctx, mock } = load();
 const ss = mock.state.active;
 
-// --- 初期設定 ---
+// --- 初期設定（持ち主が最初に開く） ---
+const OWNER = 'admin@example.com', STAFF = 'staff@example.com', VIEWER = 'viewer@example.com', MANAGER = 'manager@example.com';
+mock.as(STAFF);
+ok(/持ち主/.test(JSON.stringify(ctx.doGet && (() => { try { ctx.doGet(); return 'opened'; } catch (e) { return e.message; } })())) || !ss.getSheetByName('設定'), '持ち主より先にスタッフが開いても初期設定は走らない');
+mock.as(OWNER);
 ctx.doGet();
-ok(Object.values(ctx.__T.SH).every(n => ss.getSheetByName(n)), '初回アクセスで全シートが作られる');
-ok(ss.getSheetByName('ユーザー').cell(2, 1) === 'admin@example.com', '公開した人が最初の管理者になる');
+ok(Object.values(ctx.__T.SH).every(n => ss.getSheetByName(n)), '持ち主が開くと全シートが作られる');
+const adminSs = mock.state.all.find(x => x.id === mock.state.props[ctx.__T.ADMIN_PROP]);
+ok(adminSs && Object.values(ctx.__T.ASH).every(n => adminSs.getSheetByName(n)), '管理者用スプレッドシートが別に作られる');
+ok(ss.getSheetByName('術式マスタ').getProtections().length === 1 && ss.getSheetByName('手術・入院台帳').getProtections().length === 0, 'マスタは保護、台帳は保護しない');
 
 // --- テスト用マスタ（架空のデータ） ---
 paste(mock, '術式マスタ', [
-  ['A', '術式A', '区分A', 1, 100000, '', 30000, '', '白内障', true],
-  ['B', '術式B', '区分B', 0, 50000, 90000, 5000, 8000, '眼瞼', true],
-  ['T', '術式T', '区分T', 2, 400000, '', 150000, '', '網膜硝子体', true]
+  ['A', '術式A', '区分A', 1, '白内障', true],
+  ['B', '術式B', '区分B', 0, '眼瞼', true],
+  ['T', '術式T', '区分T', 2, '網膜硝子体', true]
 ]);
+paste(mock, '術式単価', [['A', 100000, '', 30000, ''], ['B', 50000, 90000, 5000, 8000], ['T', 400000, '', 150000, '']], true);
 paste(mock, '収益区分マスタ', [
   ['区分A', 70000, false, true, true, true],
   ['区分B', 45000, false, false, true, true],
   ['区分T', 250000, true, true, false, true]
-]);
+], true);
 paste(mock, '医師マスタ', [['医師1', true], ['医師2', true]]);
 paste(mock, 'ベッドマスタ', [[1, 'ベッド1', true], [2, 'ベッド2', true]]);
 paste(mock, '発注先マスタ', [['卸X', '卸X株式会社', '品目', false, true], ['レンズ', '', '金額', true, true]]);
@@ -35,9 +42,10 @@ paste(mock, '品目マスタ', [
   ['', '卸X', '区分1', '棚A', '002', '品目2', 'メーカーQ', '', '1本', '', 2500, true, true],
   ['', '卸X', '区分2', '', '003', '品目3', '', '', '', '', 300, false, false]
 ]);
-ss.getSheetByName('設定').getRange(3, 2).setValue(50000);
+adminSs.getSheetByName('管理者設定').getRange(2, 2).setValue(50000);
 
 const boot = ctx.getBootstrap();
+ok(boot.user.role === '管理', '持ち主は「管理」');
 ok(boot.items.length === 3 && boot.items.every(i => /^I\d{4}$/.test(i.id)), '品目IDが空なら自動で振られる');
 ok(boot.procs[0].charge1 === 100000 && boot.cats[0].unit === 70000, '管理者には単価が見える');
 
@@ -111,18 +119,35 @@ ok(exp.maxR >= 4 + 30 && exp.cells['3,2'].v === '日付', '支出合計：月の
 const xl = ctx.exportMonthly('2026-11');
 const sheets = JSON.parse(Buffer.from(xl.b64, 'base64').toString('utf8'));
 ok(xl.name === '月次レポート_202611.xlsx' && sheets.map(s => s.name).join() === '収益表,コスト計算用,支出合計,発注集計_卸X', '月次レポートのシート構成');
-ok(mock.state.created.every(s => s.trashed), '出力に使った一時スプレッドシートはゴミ箱に移す');
+ok(mock.state.created.filter(s => s !== adminSs).every(s => s.trashed), '出力に使った一時スプレッドシートはゴミ箱に移す');
 const fax = JSON.parse(Buffer.from(ctx.exportOrderSheet(oid, false).b64, 'base64').toString('utf8'))[0];
 ok(fax.data[0][1] === '卸X株式会社　御中' && fax.data.some(row => row[2] === '品目1' && row[6] === 5), '発注書：宛名と注文した品目');
 
-// --- 権限と見出し ---
-ss.getSheetByName('ユーザー').appendRow(['staff@example.com', 'スタッフ', '入力']);
-mock.state.user = 'staff@example.com';
+// --- 権限（Googleの共有設定で決まる） ---
+mock.share(ss, STAFF, 'edit');
+mock.share(ss, VIEWER, 'view');
+mock.share(ss, MANAGER, 'edit');
+mock.share(adminSs, MANAGER, 'edit');
+mock.as(STAFF);
 const sb = ctx.getBootstrap();
-ok(sb.procs[0].charge1 === undefined && sb.cats[0].unit === undefined && sb.items.length === 3, '入力権限：単価・収入は見えないが品目は見える');
-throwsLike(() => ctx.getMonthSummary('2026-11'), /権限/, '入力権限：収益は見られない');
-mock.state.user = 'admin@example.com';
+ok(sb.user.role === '入力', '編集者として共有された人は「入力」');
+ok(sb.procs[0].charge1 === undefined && sb.cats.length === 0 && sb.perInpatient === null && sb.items.length === 3, '入力：単価・収入は受け取らないが品目は見える');
+throwsLike(() => ctx.getMonthSummary('2026-11'), /権限/, '入力：収益は見られない');
+ok(ctx.saveBooking({ patientId: '101', kind: '外来', opDate: '2026-11-20', proc: 'A', eye: '右', doctor: '医師1' }).ok, '入力：記録を登録できる（台帳は保護していない）');
+ok(ctx.saveOrder({ date: '2026-11-20', vendor: '卸X', lines: [{ itemId: i1, qty: 1 }] }).ok, '入力：発注を登録できる');
+mock.as(VIEWER);
+ok(ctx.getBootstrap().user.role === '閲覧', '閲覧者として共有された人は「閲覧」');
+throwsLike(() => ctx.saveBooking({}), /権限/, '閲覧：登録できない');
+mock.as('stranger@example.com');
+throwsLike(() => ctx.getBootstrap(), /権限/, '共有されていない人は使えない');
+mock.as(MANAGER);
+const mb = ctx.getBootstrap();
+ok(mb.user.role === '管理' && mb.procs[0].charge1 === 100000 && mb.perInpatient === 50000, '管理者用スプレッドシートを共有された人は「管理」');
+ok(ctx.getMonthSummary('2026-11').surgery.out.eyes === 2, '管理：収益を見られる');
+mock.as(OWNER);
+ss.getSheetByName('術式マスタ').protection = null;
 ss.getSheetByName('術式マスタ').getRange(1, 3).setValue('入院パターン');
+mock.state.cache = {};
 throwsLike(() => ctx.getBootstrap(), /術式マスタ.*3列目/, '見出しが違えば分かりやすいエラーになる');
 
 console.log(failed ? '\n' + failed + ' 件失敗' : '\nすべて成功');

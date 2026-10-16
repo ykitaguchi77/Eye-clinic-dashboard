@@ -36,6 +36,7 @@
     }
     cell(r, c) { const row = this.data[r - 1]; return row && row[c - 1] !== undefined ? row[c - 1] : ''; }
     put(r, c, v) {
+      if (this.protection && this.protection.editors.indexOf(state.user) < 0) throw new Error('保護されているシートは編集できません: ' + this.name);
       if (r > this.maxRows || c > this.maxCols) throw new Error('The coordinates of the range are outside the dimensions of the sheet.');
       while (this.data.length < r) this.data.push([]);
       const row = this.data[r - 1];
@@ -61,6 +62,17 @@
     }
     setFrozenRows(n) { this.frozen = n; return this; }
     setColumnWidth(c, w) { this.widths[c] = w; return this; }
+    getProtections() { return this.protection ? [this.protection] : []; }
+    protect() {
+      const owner = this.ss.owner;
+      const p = { editors: [owner], description: '',
+        setDescription(d) { p.description = d; return p; },
+        getEditors() { return p.editors.map(e => ({ getEmail: () => e })); },
+        removeEditors(list) { const rm = list.map(u => u.getEmail()); p.editors = p.editors.filter(e => rm.indexOf(e) < 0); return p; },
+        canDomainEdit() { return false; }, setDomainEdit() { return p; } };
+      this.protection = p;
+      return p;
+    }
   }
 
   class MockRange {
@@ -102,8 +114,9 @@
   }
 
   class MockSpreadsheet {
-    constructor(name) { this.name = name; this.sheets = []; this.id = 'ss' + Math.random().toString(36).slice(2); }
+    constructor(name, owner) { this.name = name; this.sheets = []; this.id = 'ss' + Math.random().toString(36).slice(2); this.owner = owner; this.shares = {}; }
     getId() { return this.id; }
+    getUrl() { return 'https://docs.google.com/spreadsheets/d/' + this.id + '/edit'; }
     getSheetByName(n) { return this.sheets.find(s => s.name === n) || null; }
     getSheets() { return this.sheets.slice(); }
     insertSheet(n) {
@@ -114,18 +127,29 @@
     toast() { throw new Error('toast is not available in web app context'); }
   }
 
-  const state = { active: null, created: [], user: 'admin@example.com', effective: 'admin@example.com', calendar: [] };
+  const state = { active: null, created: [], all: [], user: 'admin@example.com', calendar: [], props: {}, cache: {} };
+  const canAccess = (ss, mode) => {
+    if (ss.owner === state.user) return true;
+    const sh = ss.shares[state.user];
+    return mode === 'edit' ? sh === 'edit' : !!sh;
+  };
 
   const SpreadsheetApp = {
     getActive() { return state.active; },
-    create(name) { const ss = new MockSpreadsheet(name); ss.insertSheet('Sheet1'); state.created.push(ss); return ss; },
+    create(name) { const ss = new MockSpreadsheet(name, state.user); ss.insertSheet('Sheet1'); state.created.push(ss); state.all.push(ss); return ss; },
+    openById(id) {
+      const ss = state.all.find(x => x.id === id);
+      if (!ss || !canAccess(ss, 'view')) throw new Error('You do not have permission to access the requested document.');
+      return ss;
+    },
+    ProtectionType: { SHEET: 'SHEET', RANGE: 'RANGE' },
     flush() {},
     newDataValidation() { const b = { requireValueInList() { return b; }, build() { return {}; } }; return b; },
     BorderStyle: { SOLID: 'SOLID' }
   };
   const Session = {
     getActiveUser() { return { getEmail: () => state.user }; },
-    getEffectiveUser() { return { getEmail: () => state.effective }; },
+    getEffectiveUser() { return { getEmail: () => state.user }; },
     getScriptTimeZone() { return 'Asia/Tokyo'; }
   };
   const LockService = { getScriptLock() { return { waitLock() {}, releaseLock() {} }; } };
@@ -142,7 +166,21 @@
   };
   const out = { setTitle() { return out; }, addMetaTag() { return out; } };
   const HtmlService = { createHtmlOutput() { return out; }, createHtmlOutputFromFile() { return out; } };
-  const DriveApp = { getFileById(id) { return { setTrashed() { state.created = state.created.filter(s => s.id !== id || (s.trashed = true, true)); } }; } };
+  const DriveApp = {
+    getFileById(id) {
+      const ss = state.all.find(x => x.id === id);
+      return {
+        setTrashed() { if (ss) ss.trashed = true; },
+        getOwner() { return { getEmail: () => ss.owner }; },
+        // 実物と同じく、編集権限がない人には空の配列を返す
+        getEditors() { return canAccess(ss, 'edit') ? Object.keys(ss.shares).filter(e => ss.shares[e] === 'edit').map(e => ({ getEmail: () => e })) : []; },
+        getParents() { return { hasNext: () => false }; },
+        moveTo() {}
+      };
+    }
+  };
+  const PropertiesService = { getScriptProperties() { return { getProperty: k => state.props[k] || null, setProperty: (k, v) => { state.props[k] = v; } }; } };
+  const CacheService = { getUserCache() { const c = state.cache[state.user] || (state.cache[state.user] = {}); return { get: k => c[k] || null, put: (k, v) => { c[k] = v; } }; } };
   const ScriptApp = { getOAuthToken() { return 'token'; } };
   // 出力のテスト用：作ったスプレッドシートの中身を JSON にして「xlsx の中身」として返す
   const UrlFetchApp = {
@@ -172,7 +210,15 @@
 
   root.GasMock = {
     state, MockSpreadsheet,
-    reset() { state.active = new MockSpreadsheet('test'); state.active.insertSheet('シート1'); state.created = []; state.calendar = []; return state.active; },
-    globals: { SpreadsheetApp, Session, LockService, Utilities, HtmlService, DriveApp, ScriptApp, UrlFetchApp, CalendarApp }
+    reset() {
+      state.user = 'admin@example.com';
+      state.active = new MockSpreadsheet('test', state.user); state.active.insertSheet('シート1');
+      state.created = []; state.all = [state.active]; state.calendar = []; state.props = {}; state.cache = {};
+      return state.active;
+    },
+    /** ユーザーを切り替える（キャッシュは各自のもの） */
+    as(email) { state.user = email; },
+    share(ss, email, mode) { ss.shares[email] = mode; },
+    globals: { SpreadsheetApp, Session, LockService, Utilities, HtmlService, DriveApp, ScriptApp, UrlFetchApp, CalendarApp, PropertiesService, CacheService }
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

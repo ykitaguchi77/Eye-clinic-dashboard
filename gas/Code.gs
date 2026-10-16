@@ -11,36 +11,49 @@
  */
 
 /**
- * 入院・手術・発注管理 v0.2
+ * 入院・手術・発注管理 v0.3
  * Googleスプレッドシート（コンテナバインド）＋ Apps Script ウェブアプリ
  *
  * ・入院／外来手術の登録と病床カレンダー
  * ・薬品・医療材料の発注入力
  * ・収益表、支出合計、発注集計、発注書の Excel 出力
  *
- * 初回：ウェブアプリを公開してURLを開くと、必要なシートが自動で作られる → 各マスタを入力
+ * 権限は Google の共有設定で決まる（個人の Google アカウントでも使える）
+ *   管理：管理者用スプレッドシート（収益区分・術式単価）を開ける人
+ *   入力：このスプレッドシートの編集者
+ *   閲覧：このスプレッドシートの閲覧者
+ * ウェブアプリは「アクセスしているユーザーとして実行」で公開する。
+ * 初回：スプレッドシートの持ち主がURLを開くと、必要なシートと管理者用スプレッドシートが自動で作られる。
  */
 
+// このスプレッドシート（スタッフと共有する）
 const SH = {
   BOOK: '手術・入院台帳',
   PROC: '術式マスタ',
-  CATG: '収益区分マスタ',
   DOC: '医師マスタ',
   BED: 'ベッドマスタ',
   SLOT: '手術枠マスタ',
   VEND: '発注先マスタ',
   ITEM: '品目マスタ',
   ORDER: '発注台帳',
-  USER: 'ユーザー',
   CONF: '設定',
   LOG: '変更履歴'
 };
+// 管理者用スプレッドシート（管理者だけと共有する）
+const ASH = {
+  CATG: '収益区分マスタ',
+  PRICE: '術式単価',
+  CONF: '管理者設定'
+};
+// 持ち主以外は編集できないように保護するシート
+const PROTECTED = ['PROC', 'DOC', 'BED', 'SLOT', 'VEND', 'ITEM', 'CONF'];
+const ADMIN_PROP = 'ADMIN_SPREADSHEET_ID';
+const APP_TITLE = '入院・手術・発注管理';
 
 const HEAD = {
   BOOK: ['予約ID', '患者ID', '術式コード', '区分', '手術日', '眼', '執刀医', '入院日', '泊数', 'ベッド番号',
     '状態', 'メモ', '登録者', '登録日時', '更新者', '更新日時', 'カレンダーイベントID'],
-  PROC: ['術式コード', '表示名', '収益区分', '標準泊数', '請求額(片眼)', '請求額(両眼)', 'コスト(片眼)', 'コスト(両眼)', '色分け', '有効'],
-  CATG: ['区分名', '1眼あたり収入(円)', 'トリプル', '入院表に常に表示', '外来表に常に表示', '有効'],
+  PROC: ['術式コード', '表示名', '収益区分', '標準泊数', '色分け', '有効'],
   DOC: ['氏名', '有効'],
   BED: ['ベッド番号', '名称', '有効'],
   SLOT: ['曜日', '手術枠数'],
@@ -48,9 +61,12 @@ const HEAD = {
   ITEM: ['品目ID', '発注先', '区分', '小区分', '商品コード', '品名', 'メーカー', '規格', '入数', '薬価', '納入価', '後発', '有効'],
   ORDER: ['発注ID', '発注日', '発注先', '品目ID', '品名', '区分', '小区分', '規格', '入数', '単価', '数量', '金額', 'メモ',
     '状態', '登録者', '登録日時', '更新者', '更新日時'],
-  USER: ['メールアドレス', '氏名', '権限'],
   CONF: ['項目', '値', '説明'],
-  LOG: ['日時', 'ユーザー', '操作', 'ID', '内容']
+  LOG: ['日時', 'ユーザー', '操作', 'ID', '内容'],
+  // 管理者用
+  CATG: ['区分名', '1眼あたり収入(円)', 'トリプル', '入院表に常に表示', '外来表に常に表示', '有効'],
+  PRICE: ['術式コード', '請求額(片眼)', '請求額(両眼)', 'コスト(片眼)', 'コスト(両眼)'],
+  ACONF: ['項目', '値', '説明']
 };
 
 // 台帳の列番号（0始まり）
@@ -67,12 +83,11 @@ const EYES = ['右', '左', '両'];
 const WEEKDAYS = '日月火水木金土';
 
 /* ------------------------------------------------------------
- * 初期設定（シートがなければ作る。既にあるシートは上書きしない）
+ * 初期設定（持ち主が実行。既にあるシートは上書きしない）
  * ---------------------------------------------------------- */
 function setup() {
   const ss = SpreadsheetApp.getActive();
-  // 実行者（ウェブアプリ初回アクセス時はデプロイした人）を最初の管理者にする
-  const me = Session.getEffectiveUser().getEmail() || Session.getActiveUser().getEmail();
+  const me = currentEmail_();
 
   const book = makeSheet_(ss, SH.BOOK, HEAD.BOOK, []);
   if (book) {
@@ -82,24 +97,14 @@ function setup() {
   }
 
   const proc = makeSheet_(ss, SH.PROC, HEAD.PROC, [
-    ['CAT', '白内障', '白内障', 1, 0, '', 0, '', '白内障', true],
-    ['MF', '多焦点眼内レンズ', '多焦点', 1, 0, '', 0, '', '白内障', true],
-    ['VIT', '硝子体手術', '硝子体シングル', 2, 0, '', 0, '', '網膜硝子体', true],
-    ['VIT3', '硝子体手術（白内障同時）', '硝子体トリプル', 2, 0, '', 0, '', '網膜硝子体', true],
-    ['PTO', '眼瞼下垂', '下垂片眼', 0, 0, '', 0, '', '眼瞼', true],
-    ['DCR', '涙嚢鼻腔吻合術', '涙道', 2, 0, '', 0, '', '涙道', true]
+    ['CAT', '白内障', '白内障', 1, '白内障', true],
+    ['MF', '多焦点眼内レンズ', '多焦点', 1, '白内障', true],
+    ['VIT', '硝子体手術', '硝子体シングル', 2, '網膜硝子体', true],
+    ['VIT3', '硝子体手術（白内障同時）', '硝子体トリプル', 2, '網膜硝子体', true],
+    ['PTO', '眼瞼下垂', '下垂片眼', 0, '眼瞼', true],
+    ['DCR', '涙嚢鼻腔吻合術', '涙道', 2, '涙道', true]
   ]);
-  if (proc) checkboxes_(proc, 10, 300);
-
-  const catg = makeSheet_(ss, SH.CATG, HEAD.CATG, [
-    ['多焦点', 0, false, true, true, true],
-    ['白内障', 0, false, true, true, true],
-    ['硝子体シングル', 0, false, true, true, true],
-    ['硝子体トリプル', 0, true, true, true, true],
-    ['下垂片眼', 0, false, false, true, true],
-    ['涙道', 0, false, false, true, true]
-  ]);
-  if (catg) { [3, 4, 5, 6].forEach(c => checkboxes_(catg, c, 100)); }
+  if (proc) checkboxes_(proc, 6, 300);
 
   const doc = makeSheet_(ss, SH.DOC, HEAD.DOC, []);
   if (doc) checkboxes_(doc, 2, 50);
@@ -129,13 +134,8 @@ function setup() {
   const order = makeSheet_(ss, SH.ORDER, HEAD.ORDER, []);
   if (order) order.getRange('B2:B').setNumberFormat('yyyy-mm-dd');
 
-  const user = makeSheet_(ss, SH.USER, HEAD.USER, [[me, '管理者', '管理']]);
-  if (user) user.getRange('C2:C').setDataValidation(
-    SpreadsheetApp.newDataValidation().requireValueInList(ROLES_ALL, true).build());
-
   makeSheet_(ss, SH.CONF, HEAD.CONF, [
     ['施設名', '', '画面上部と出力ファイルに表示（任意）'],
-    ['入院1人あたり収入(円)', 0, '収益表の「入院」の1人あたり収入'],
     ['カレンダーID', '', '入れると Googleカレンダーへ自動反映（空欄なら反映しない）']
   ]);
 
@@ -144,7 +144,46 @@ function setup() {
   const def = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
   if (def && def.getLastRow() === 0 && ss.getSheets().length > 1) ss.deleteSheet(def);
 
+  // マスタは持ち主だけが編集できるようにする（スタッフは画面から台帳に書き込むだけ）
+  PROTECTED.forEach(k => protectOwnerOnly_(ss.getSheetByName(SH[k]), me));
+
+  setupAdmin_(ss);
+
   try { ss.toast('初期設定が完了しました。各マスタを入力してください。'); } catch (e) { /* ウェブアプリから実行した場合は表示しない */ }
+}
+
+/** 管理者用スプレッドシート（収益区分・術式単価・入院1人あたり収入）を作る */
+function setupAdmin_(ss) {
+  const props = PropertiesService.getScriptProperties();
+  let admin = null;
+  const id = props.getProperty(ADMIN_PROP);
+  if (id) {
+    try { admin = SpreadsheetApp.openById(id); } catch (e) { admin = null; }
+  }
+  if (!admin) {
+    admin = SpreadsheetApp.create(APP_TITLE + '（管理者用）');
+    props.setProperty(ADMIN_PROP, admin.getId());
+    try {
+      const parents = DriveApp.getFileById(ss.getId()).getParents();
+      if (parents.hasNext()) DriveApp.getFileById(admin.getId()).moveTo(parents.next());
+    } catch (e) { /* 移動できなくても使える */ }
+  }
+  const catg = makeSheet_(admin, ASH.CATG, HEAD.CATG, [
+    ['多焦点', 0, false, true, true, true],
+    ['白内障', 0, false, true, true, true],
+    ['硝子体シングル', 0, false, true, true, true],
+    ['硝子体トリプル', 0, true, true, true, true],
+    ['下垂片眼', 0, false, false, true, true],
+    ['涙道', 0, false, false, true, true]
+  ]);
+  if (catg) { [3, 4, 5, 6].forEach(c => checkboxes_(catg, c, 100)); }
+  makeSheet_(admin, ASH.PRICE, HEAD.PRICE, ['CAT', 'MF', 'VIT', 'VIT3', 'PTO', 'DCR'].map(code => [code, 0, '', 0, '']));
+  makeSheet_(admin, ASH.CONF, HEAD.ACONF, [
+    ['入院1人あたり収入(円)', 0, '収益表の「入院」の1人あたり収入']
+  ]);
+  const def = admin.getSheetByName('シート1') || admin.getSheetByName('Sheet1');
+  if (def && def.getLastRow() === 0 && admin.getSheets().length > 1) admin.deleteSheet(def);
+  return admin;
 }
 
 function makeSheet_(ss, name, head, rows) {
@@ -160,38 +199,53 @@ function checkboxes_(sh, col, lastRow) {
   sh.getRange(2, col, lastRow - 1, 1).insertCheckboxes();
 }
 
-/** シートが1つでも欠けていれば初期設定を実行（初回アクセス時・版の更新時） */
-function ensureSetup_() {
+/** シートを持ち主だけが編集できるように保護する（既に保護されていれば何もしない） */
+function protectOwnerOnly_(sh, owner) {
+  if (!sh || sh.getProtections(SpreadsheetApp.ProtectionType.SHEET).length) return;
+  const p = sh.protect().setDescription('マスタは持ち主だけが編集できます');
+  const others = p.getEditors().filter(u => u.getEmail().toLowerCase() !== owner);
+  if (others.length) p.removeEditors(others);
+  if (p.canDomainEdit && p.canDomainEdit()) p.setDomainEdit(false);
+}
+
+function setupDone_() {
   const ss = SpreadsheetApp.getActive();
-  const missing = () => Object.keys(SH).some(k => !ss.getSheetByName(SH[k]));
-  if (!missing()) return;
+  return Object.keys(SH).every(k => ss.getSheetByName(SH[k])) &&
+    !!PropertiesService.getScriptProperties().getProperty(ADMIN_PROP);
+}
+
+/** 初期設定がまだなら、持ち主のときだけ実行する。持ち主以外なら false */
+function ensureSetup_() {
+  if (setupDone_()) return true;
+  if (currentEmail_() !== ownerEmail_()) return false;
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    if (missing()) setup();
+    if (!setupDone_()) setup();
   } finally {
     lock.releaseLock();
   }
+  return true;
 }
 
 /* ------------------------------------------------------------
  * ウェブアプリ入口
  * ---------------------------------------------------------- */
 function doGet() {
-  ensureSetup_();
+  if (!ensureSetup_()) return messagePage_('準備中です',
+    'スプレッドシートの持ち主が、先にこのURLを一度開いて初期設定を済ませてください。');
   const u = currentUser_();
-  if (!u) {
-    const email = Session.getActiveUser().getEmail() || '（取得できませんでした）';
-    return HtmlService.createHtmlOutput(
-      '<div style="font-family:sans-serif;padding:32px;line-height:1.8">' +
-      '<h2>利用権限がありません</h2>' +
-      '<p>アカウント ' + escapeHtml_(email) + ' は登録されていません。<br>' +
-      '管理者にスプレッドシートの「ユーザー」シートへの追加を依頼してください。</p></div>')
-      .setTitle('入院・手術・発注管理');
-  }
+  if (!u) return messagePage_('利用権限がありません',
+    'このスプレッドシートが共有されていないか、Googleアカウントを確認できませんでした。管理者に共有を依頼してください。');
   return page_()
-    .setTitle('入院・手術・発注管理')
+    .setTitle(APP_TITLE)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function messagePage_(title, body) {
+  return HtmlService.createHtmlOutput(
+    '<div style="font-family:sans-serif;padding:32px;line-height:1.8"><h2>' + escapeHtml_(title) + '</h2><p>' +
+    escapeHtml_(body) + '</p></div>').setTitle(APP_TITLE);
 }
 
 /**
@@ -208,22 +262,22 @@ function page_() {
  * ---------------------------------------------------------- */
 function getBootstrap() {
   const u = require_(ROLES_ALL);
-  checkHeaders_();
   const admin = u.role === '管理';
   const edit = ROLES_EDIT.indexOf(u.role) >= 0;
-  if (edit) ensureItemIds_();
+  checkHeaders_(admin);
+  if (admin) { try { ensureItemIds_(); } catch (e) { /* 品目マスタを編集できない管理者のときは持ち主が開いたときに振る */ } }
   const c = conf_();
-  const procs = procs_().map(p => admin ? p : { code: p.code, name: p.name, cat: p.cat, nights: p.nights, color: p.color, active: p.active });
   return {
     user: u,
     facility: str_(c['施設名']),
-    procs: procs,
-    cats: admin ? cats_() : cats_().map(x => ({ name: x.name, active: x.active })),
+    procs: procs_(admin),
+    cats: admin ? cats_() : [],
     doctors: doctors_(),
     beds: beds_(),
     vendors: edit ? vendors_() : [],
     items: edit ? items_() : [],
-    perInpatient: admin ? num_(c['入院1人あたり収入(円)']) : null,
+    perInpatient: admin ? num_(aconf_()['入院1人あたり収入(円)']) : null,
+    adminUrl: admin ? adminSs_().getUrl() : '',
     today: ymd_(new Date())
   };
 }
@@ -469,7 +523,7 @@ function monthData_(ym) {
   const first = days[0], last = days[nDays - 1];
   const today = ymd_(new Date());
   const c = conf_();
-  const pm = procMap_();
+  const pm = procMap_(true);
   const catList = cats_();
   const catMap = {};
   catList.forEach(x => { catMap[x.name] = x; });
@@ -515,7 +569,7 @@ function monthData_(ym) {
   };
   const tin = table('入院'), tout = table('外来');
   const tripleEyes = tin.rows.concat(tout.rows).filter(r => r.triple).reduce((s, r) => s + r.eyes, 0);
-  const perInpatient = num_(c['入院1人あたり収入(円)']);
+  const perInpatient = num_(aconf_()['入院1人あたり収入(円)']);
 
   // 術式ごとの件数（コスト計算用）と、日ごとの手術ディスポ代
   const procRows = {};
@@ -529,7 +583,7 @@ function monthData_(ym) {
     dispoByDay[b.opDate] = (dispoByDay[b.opDate] || 0) + (two ? p.cost2 : p.cost1);
     charges += two ? p.charge2 : p.charge1;
   });
-  const procList = procs_().filter(p => p.active || procRows[p.code]).map(p => procRows[p.code] ||
+  const procList = procs_(true).filter(p => p.active || procRows[p.code]).map(p => procRows[p.code] ||
     { code: p.code, name: p.name, charge1: p.charge1, charge2: p.charge2, cost1: p.cost1, cost2: p.cost2, n1: 0, n2: 0 });
   Object.keys(procRows).forEach(k => { if (!pm[k]) procList.push(procRows[k]); });
 
@@ -1000,34 +1054,96 @@ function safeName_(s) {
 }
 
 /** 見出しが今の版と違うシートがあれば、分かりやすいエラーにする（古い版のスプレッドシートを使った場合など） */
-function checkHeaders_() {
-  ['BOOK', 'PROC', 'CATG', 'VEND', 'ITEM', 'ORDER'].forEach(k => {
-    const sh = sheet_(SH[k]);
-    const head = sh.getRange(1, 1, 1, HEAD[k].length).getValues()[0].map(str_);
-    const bad = HEAD[k].findIndex((h, i) => head[i] !== h);
+function checkHeaders_(admin) {
+  const check = (sh, head, label) => {
+    const got = sh.getRange(1, 1, 1, head.length).getValues()[0].map(str_);
+    const bad = head.findIndex((h, i) => got[i] !== h);
     if (bad >= 0) {
-      throw new Error('シート「' + SH[k] + '」の' + (bad + 1) + '列目の見出しが「' + (head[bad] || '空欄') + '」になっています（正しくは「' +
-        HEAD[k][bad] + '」）。1行目の見出しは変えずに、2行目以降にデータを入れてください。');
+      throw new Error(label + 'の' + (bad + 1) + '列目の見出しが「' + (got[bad] || '空欄') + '」になっています（正しくは「' +
+        head[bad] + '」）。1行目の見出しは変えずに、2行目以降にデータを入れてください。');
     }
-  });
+  };
+  ['BOOK', 'PROC', 'VEND', 'ITEM', 'ORDER'].forEach(k => check(sheet_(SH[k]), HEAD[k], 'シート「' + SH[k] + '」'));
+  if (admin) {
+    check(adminSheet_(ASH.CATG), HEAD.CATG, '管理者用の「' + ASH.CATG + '」');
+    check(adminSheet_(ASH.PRICE), HEAD.PRICE, '管理者用の「' + ASH.PRICE + '」');
+  }
 }
 
 /* ------------------------------------------------------------
  * 内部関数：読み取り
  * ---------------------------------------------------------- */
+function currentEmail_() {
+  return (Session.getActiveUser().getEmail() || Session.getEffectiveUser().getEmail() || '').toLowerCase();
+}
+
+function ownerEmail_() {
+  try {
+    const o = DriveApp.getFileById(SpreadsheetApp.getActive().getId()).getOwner();
+    return o ? o.getEmail().toLowerCase() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+/** 共有設定から権限を決める（5分間キャッシュ） */
 function currentUser_() {
-  const email = (Session.getActiveUser().getEmail() || '').toLowerCase();
+  const email = currentEmail_();
   if (!email) return null;
-  const r = rows_(SH.USER).find(x => str_(x[0]).toLowerCase() === email);
-  if (!r) return null;
-  const role = str_(r[2]) || '閲覧';
-  return { email: email, name: str_(r[1]) || email, role: ROLES_ALL.indexOf(role) >= 0 ? role : '閲覧' };
+  const cache = CacheService.getUserCache();
+  let role = cache ? cache.get('role') : null;
+  if (!role) {
+    if (canOpenAdmin_()) role = '管理';
+    else if (canEditMain_(email)) role = '入力';
+    else if (canViewMain_()) role = '閲覧';
+    else return null;
+    if (cache) cache.put('role', role, 300);
+  }
+  return { email: email, name: email, role: role };
+}
+
+function canOpenAdmin_() {
+  const id = PropertiesService.getScriptProperties().getProperty(ADMIN_PROP);
+  if (!id) return false;
+  try { SpreadsheetApp.openById(id).getId(); return true; } catch (e) { return false; }
+}
+
+function canViewMain_() {
+  try { SpreadsheetApp.openById(SpreadsheetApp.getActive().getId()).getId(); return true; } catch (e) { return false; }
+}
+
+function canEditMain_(email) {
+  try {
+    const f = DriveApp.getFileById(SpreadsheetApp.getActive().getId());
+    const owner = f.getOwner();
+    if (owner && owner.getEmail().toLowerCase() === email) return true;
+    return f.getEditors().some(u => u.getEmail().toLowerCase() === email);
+  } catch (e) {
+    return false;
+  }
 }
 
 function require_(roles) {
   const u = currentUser_();
   if (!u || roles.indexOf(u.role) < 0) throw new Error('この操作の権限がありません。');
   return u;
+}
+
+/** 管理者用スプレッドシート（管理者だけが開ける） */
+function adminSs_() {
+  const id = PropertiesService.getScriptProperties().getProperty(ADMIN_PROP);
+  if (!id) throw new Error('管理者用スプレッドシートがまだありません。持ち主がURLを開いて初期設定をしてください。');
+  try { return SpreadsheetApp.openById(id); } catch (e) { throw new Error('この操作の権限がありません。'); }
+}
+
+function adminSheet_(name) {
+  const sh = adminSs_().getSheetByName(name);
+  if (!sh) throw new Error('管理者用スプレッドシートにシート「' + name + '」がありません。');
+  return sh;
+}
+
+function adminRows_(name) {
+  return adminSheet_(name).getDataRange().getValues().slice(1);
 }
 
 function sheet_(name) {
@@ -1046,6 +1162,12 @@ function conf_() {
   return o;
 }
 
+function aconf_() {
+  const o = {};
+  adminRows_(ASH.CONF).forEach(r => { if (str_(r[0])) o[str_(r[0])] = r[1]; });
+  return o;
+}
+
 function str_(v) {
   if (v === null || v === undefined) return '';
   if (v instanceof Date) return ymd_(v);
@@ -1058,27 +1180,37 @@ function num_(v) {
 }
 function truthy_(v) { return v === true || String(v).toUpperCase() === 'TRUE'; }
 
-function procs_() {
-  return rows_(SH.PROC).filter(r => str_(r[0])).map(r => {
-    const c1 = num_(r[4]), k1 = num_(r[6]);
-    return {
-      code: str_(r[0]), name: str_(r[1]) || str_(r[0]), cat: str_(r[2]),
-      nights: Math.max(0, Math.round(num_(r[3]))),
-      charge1: c1, charge2: str_(r[5]) === '' ? c1 * 2 : num_(r[5]),
-      cost1: k1, cost2: str_(r[7]) === '' ? k1 * 2 : num_(r[7]),
-      color: str_(r[8]), active: truthy_(r[9])
-    };
-  });
+/** 術式マスタ。withPrices なら管理者用の術式単価（請求額・コスト）を合わせる */
+function procs_(withPrices) {
+  const list = rows_(SH.PROC).filter(r => str_(r[0])).map(r => ({
+    code: str_(r[0]), name: str_(r[1]) || str_(r[0]), cat: str_(r[2]),
+    nights: Math.max(0, Math.round(num_(r[3]))), color: str_(r[4]), active: truthy_(r[5])
+  }));
+  if (!withPrices) return list;
+  const pr = prices_();
+  return list.map(p => Object.assign(p, pr[p.code] || { charge1: 0, charge2: 0, cost1: 0, cost2: 0 }));
 }
 
-function procMap_() {
+function prices_() {
   const m = {};
-  procs_().forEach(p => { m[p.code] = p; });
+  adminRows_(ASH.PRICE).filter(r => str_(r[0])).forEach(r => {
+    const c1 = num_(r[1]), k1 = num_(r[3]);
+    m[str_(r[0])] = {
+      charge1: c1, charge2: str_(r[2]) === '' ? c1 * 2 : num_(r[2]),
+      cost1: k1, cost2: str_(r[4]) === '' ? k1 * 2 : num_(r[4])
+    };
+  });
+  return m;
+}
+
+function procMap_(withPrices) {
+  const m = {};
+  procs_(withPrices).forEach(p => { m[p.code] = p; });
   return m;
 }
 
 function cats_() {
-  return rows_(SH.CATG).filter(r => str_(r[0])).map(r => ({
+  return adminRows_(ASH.CATG).filter(r => str_(r[0])).map(r => ({
     name: str_(r[0]), unit: num_(r[1]), triple: truthy_(r[2]), showIn: truthy_(r[3]), showOut: truthy_(r[4]), active: truthy_(r[5])
   }));
 }
@@ -1495,6 +1627,7 @@ input[type=range]{width:100%;accent-color:var(--sel);height:32px}
       <div class="toolbar" style="margin:0">
         <div style="width:200px"><label class="label" for="rMonth">対象月</label><input type="month" id="rMonth"></div>
         <span class="grow"></span>
+        <a id="rAdminLink" class="ghost" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener">収益区分・単価を編集</a>
         <button type="button" class="primary" id="rExport">この月の月次レポートをExcelで出力</button>
       </div>
       <div id="rDl" class="dl"></div>
@@ -1599,6 +1732,7 @@ async function init() {
   document.querySelector('[data-view="out"]').hidden = !canEdit();
   document.querySelector('[data-view="rev"]').hidden = !isAdmin();
   $('xMonthlyPanel').hidden = !isAdmin();
+  if (S.boot.adminUrl) $('rAdminLink').href = S.boot.adminUrl; else $('rAdminLink').hidden = true;
   if (!canEdit()) { $('formPanel').hidden = true; $('bookLayout').style.gridTemplateColumns = 'minmax(0,1fr)'; }
   document.querySelectorAll('.tab').forEach(t => { t.onclick = () => showView(t.dataset.view); });
 
@@ -2203,10 +2337,10 @@ function renderRev() {
   const dispo = Object.keys(d.dispoByDay).reduce((s, k) => s + d.dispoByDay[k], 0);
 
   const warn = [];
-  if (d.unknownCats.length) warn.push('収益区分マスタにない区分があります（' + d.unknownCats.map(esc).join('、') + '）。収入0で集計しています。');
+  if (d.unknownCats.length) warn.push('管理者用の収益区分マスタにない区分があります（' + d.unknownCats.map(esc).join('、') + '）。収入0で集計しています。');
   const zero = sIn.rows.concat(sOut.rows).filter(r => r.eyes > 0 && !r.unit).map(r => r.cat);
   if (zero.length) warn.push('1眼あたり収入が0の区分に手術があります（' + zero.map(esc).join('、') + '）。');
-  if (!d.inpatient.unit && d.inpatient.people) warn.push('設定シートの「入院1人あたり収入(円)」が0です。');
+  if (!d.inpatient.unit && d.inpatient.people) warn.push('管理者用スプレッドシートの「管理者設定」で、入院1人あたり収入(円)が0になっています。');
   $('revWarn').hidden = !warn.length;
   $('revWarn').innerHTML = warn.join('<br>');
 

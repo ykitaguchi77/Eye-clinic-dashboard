@@ -251,6 +251,7 @@ input[type=range]{width:100%;accent-color:var(--sel);height:32px}
       <div class="toolbar" style="margin:0">
         <div style="width:200px"><label class="label" for="rMonth">対象月</label><input type="month" id="rMonth"></div>
         <span class="grow"></span>
+        <a id="rAdminLink" class="ghost" style="display:inline-flex;align-items:center;text-decoration:none" target="_blank" rel="noopener">収益区分・単価を編集</a>
         <button type="button" class="primary" id="rExport">この月の月次レポートをExcelで出力</button>
       </div>
       <div id="rDl" class="dl"></div>
@@ -355,6 +356,7 @@ async function init() {
   document.querySelector('[data-view="out"]').hidden = !canEdit();
   document.querySelector('[data-view="rev"]').hidden = !isAdmin();
   $('xMonthlyPanel').hidden = !isAdmin();
+  if (S.boot.adminUrl) $('rAdminLink').href = S.boot.adminUrl; else $('rAdminLink').hidden = true;
   if (!canEdit()) { $('formPanel').hidden = true; $('bookLayout').style.gridTemplateColumns = 'minmax(0,1fr)'; }
   document.querySelectorAll('.tab').forEach(t => { t.onclick = () => showView(t.dataset.view); });
 
@@ -959,10 +961,10 @@ function renderRev() {
   const dispo = Object.keys(d.dispoByDay).reduce((s, k) => s + d.dispoByDay[k], 0);
 
   const warn = [];
-  if (d.unknownCats.length) warn.push('収益区分マスタにない区分があります（' + d.unknownCats.map(esc).join('、') + '）。収入0で集計しています。');
+  if (d.unknownCats.length) warn.push('管理者用の収益区分マスタにない区分があります（' + d.unknownCats.map(esc).join('、') + '）。収入0で集計しています。');
   const zero = sIn.rows.concat(sOut.rows).filter(r => r.eyes > 0 && !r.unit).map(r => r.cat);
   if (zero.length) warn.push('1眼あたり収入が0の区分に手術があります（' + zero.map(esc).join('、') + '）。');
-  if (!d.inpatient.unit && d.inpatient.people) warn.push('設定シートの「入院1人あたり収入(円)」が0です。');
+  if (!d.inpatient.unit && d.inpatient.people) warn.push('管理者用スプレッドシートの「管理者設定」で、入院1人あたり収入(円)が0になっています。');
   $('revWarn').hidden = !warn.length;
   $('revWarn').innerHTML = warn.join('<br>');
 
